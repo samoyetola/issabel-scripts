@@ -13,7 +13,5 @@ sudo yum -y install wget vim  net-tools nano
 
 sudo yum -y groupinstall "Development Tools"
 
-
 #issabel installation
 wget -O - http://repo.issabel.org/issabel4-netinstall.sh | bash
-
