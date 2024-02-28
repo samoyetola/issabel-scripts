@@ -1,0 +1,54 @@
+version: 0.2
+
+phases:
+  install:
+    commands:
+      - nohup /usr/local/bin/dockerd --host=unix:///var/run/docker.sock --host=tcp://127.0.0.1:2375 --storage-driver=overlay2&
+      - timeout 15 sh -c "until docker info; do echo .; sleep 1; done"
+      - curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin  
+  pre_build:
+    commands:
+    - echo Logging in to Amazon ECR....   
+    - aws --version  
+    # update the following line with your own region  
+    - aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin 334236250727.dkr.ecr.us-west-2.amazonaws.com
+    - COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)  
+    - IMAGE_TAG=${COMMIT_HASH:=$BRANCH}  
+    - echo $IMAGE_TAG 
+    # update the following line with the URI of your own ECR repository (view the Push Commands in the console)  
+    - REPOSITORY_URI=$ECR_URI
+    - ls -la $CODEBUILD_SRC_DIR
+    # echo retrieving env variables from S3
+    # aws s3 cp s3://carbon-business-clientenv-variables/share-env .
+    # mv share-env ./.env
+  build:
+    commands:
+    - trivy --version
+    - echo Build started on `date`
+    - echo Building the Docker image...   
+    - docker build -t $REPOSITORY_URI:$BRANCH -t $REPOSITORY_URI:$IMAGE_TAG . 
+  post_build:
+    commands:
+    # ------------- Push Image to ECR -------------------      
+    - echo pushing to repo
+    - ls -la $CODEBUILD_SRC_DIR
+    #- docker tag $IMAGENAME:$BRANCH $REPOSITORY_URI:$BRANCH
+    #- docker tag $IMAGENAME:$BRANCH $REPOSITORY_URI:$IMAGE_TAG
+    - aws s3 cp s3://carbon-container-scans-artifact-prod/html.tpl .
+    - trivy i -f template -t "@html.tpl" -o $CODEBUILD_SRC_DIR/"${CONTAINER_NAME}_trivy.html"  --timeout 25m --exit-code 0 --severity HIGH,MEDIUM,CRITICAL $REPOSITORY_URI:$IMAGE_TAG
+    - aws s3 cp ${CODEBUILD_SRC_DIR}/${CONTAINER_NAME}_trivy.html s3://carbon-container-scans-artifact-prod/${CONTAINER_NAME}/
+    - docker push $REPOSITORY_URI:$BRANCH
+    - docker push $REPOSITORY_URI:$IMAGE_TAG 
+    - echo Writing image definitions file...  
+    - printf '[{"name":"%s","imageUri":"%s"}]' $CONTAINER_NAME $REPOSITORY_URI:$IMAGE_TAG > imagedefinitions.json
+artifacts:
+  files:
+    - target/*
+    - imagedefinitions.json
+
+# cache:
+#   paths:
+#   # Maven stores the downloaded dependencies to the /root/.m2/     
+#     - '/root/.m2/**/*'
+#   # pip uses the /root/.cache/pip folder, and Gradle uses the /root/.gradle/caches folder.
+#     - '/root/.cache/pip'    
